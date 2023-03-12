@@ -1,0 +1,129 @@
+version: '3.9'
+
+networks:
+  proxy:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+services:
+
+  redis:
+    image: redis:7.0.9-alpine
+    networks:
+      - proxy
+    volumes:
+      - cache:/data
+    restart: always
+
+  db:
+    image: postgres:15-alpine
+    env_file:
+      - .env
+    networks:
+      - proxy
+    volumes:
+      - database:/var/lib:postgresql/data
+    restart: always
+
+  pgadmin:
+    # Nesta implementação, o pgadmin está rodando na mesma rede do nginx (proxy)
+    # Uma abordagem diferente seria utilizar a rede default, e acessar através do localhost
+    # neste caso, eu não conseguiria fazer o proxy reverso, pois o nginx não está na rede default
+    # a não ser que eu crie um outro nginx na rede default, e faça o proxy reverso para ele e depois para o pgadmin
+    # mas isso é um pouco overkill
+    # Além disso, o pgadmin na implementação é uma rota pública. Ou seja, qualquer um pode acessar
+    # Note também que o nginx me possibilita limitar os ips que podem acessar o pgadmin em qualquer caso.
+    # Outras configurações nos permitem inúmeras possibilidades, pode ser que você queira limitar o acesso ao db apenas
+    # para à rede interna, por exemplo.
+
+    container_name: pgadmin
+    image: dpage/pgadmin4
+    env_file:
+      - .env
+    networks:
+      proxy:
+        # irei referenciar este service no nginx com este nome
+        aliases:
+          - pgadmin
+    depends_on:
+      - db
+    restart: always
+
+  app-1:
+    build: .
+    env_file:
+      - .env
+    networks:
+      - proxy
+    depends_on:
+      - redis
+      - db
+
+    restart: always
+
+  app-2:
+    build: .
+    env_file:
+      - .env
+    networks:
+      - proxy
+    depends_on:
+      - redis
+      - db
+
+  jupyter:
+    container_name: jupyter
+    image: jupyter/scipy-notebook
+    env_file:
+      - .env
+
+    # TLDR: use 172.28.0.15:8888 para acessar o jupyter
+    # Não consegui fazer o proxy reverso para o jupyter, então estou utilizando o ip fixo
+    # para acessar o jupyter
+    # Como o jupyter está na mesma rede do nginx, ele terá acesso ao postgres, api, etc
+    # através dos nomes dos services
+    # O problema que obtive tentando fazer o proxy reverso foi que quando eu dou um bind para uma rota
+    # do jupyer, como /jupyter, o jupyter acaba fazendo um redirect errado para /login?next=/?lab,
+    # uma rota que não existe.
+    # Tive o mesmo problema com o pgadmin, mas consegui resolver através dos headers. Aqui no jupyter parece
+    # ser mais complicado.
+    networks:
+      proxy:
+        aliases:
+          - jupyter-1
+        ipv4_address: "172.28.0.15" 
+  
+    volumes:
+      - notebooks:/home/jovyan/work
+      - ./notebooks:/home/jovyan/notebooks
+
+    restart: always
+
+  nginx:
+    container_name: nginx
+    image: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    networks:
+      - proxy
+    # O nginx precisa que os serviços sejam inicializados primeiro para depois poder referenciar eles
+    depends_on:
+      - app-1
+      - app-2
+
+    restart: always
+
+volumes:
+  cache:
+    driver: local
+
+  database:
+
+  notebooks:
+    driver: local
+    
