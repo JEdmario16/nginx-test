@@ -143,6 +143,6 @@ def get_book_by_id(id):
         # salva o livro no cache
         redis.hset(f"book_{id}", mapping=book.to_dict())
 
-        return {"book": jsonify(book.to_dict()), "is_a_cache_value": False}
+        return {"book": book.to_dict(), "is_a_cache_value": False}
     
     return {"message": "Livro não encontrado"}
